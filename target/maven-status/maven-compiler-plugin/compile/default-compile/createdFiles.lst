@@ -1,0 +1,17 @@
+org\example\Annotations\Inject.class
+org\example\Annotations\Named.class
+org\example\TestClasses\FS.class
+org\example\TestClasses\AI.class
+org\example\TestClasses\FSI.class
+org\example\Annotations\Default.class
+org\example\TestClasses\C.class
+org\example\TestClasses\DI.class
+org\example\RegistryException.class
+org\example\TestClasses\B.class
+org\example\Initializer.class
+org\example\TestClasses\F.class
+org\example\Main.class
+org\example\TestClasses\E.class
+org\example\Registry.class
+org\example\TestClasses\A.class
+org\example\TestClasses\D.class
