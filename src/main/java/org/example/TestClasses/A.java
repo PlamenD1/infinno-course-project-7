@@ -1,5 +1,8 @@
 package org.example.TestClasses;
 
+
 public class A implements AI {
-    public A() {}
+    public void message() {
+        System.out.println("Hello, I'm A!");
+    }
 }

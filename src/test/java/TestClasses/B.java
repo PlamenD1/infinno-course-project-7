@@ -1,4 +1,4 @@
-package org.example.TestClasses;
+package TestClasses;
 
 import org.example.Annotations.Inject;
 import org.example.Annotations.Lazy;

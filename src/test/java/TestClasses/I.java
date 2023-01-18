@@ -1,10 +1,10 @@
-package org.example.TestClasses;
+package TestClasses;
 
 import org.example.Annotations.Inject;
 import org.example.Annotations.Lazy;
 
-public class B {
+public class I {
     @Inject
     @Lazy
-    public A aField;
+    public C cField;
 }

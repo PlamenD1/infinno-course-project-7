@@ -1,11 +1,10 @@
-package org.example.TestClasses;
+package TestClasses;
 
 import org.example.Annotations.Inject;
-import org.example.Annotations.Lazy;
 
 public class C {
     @Inject
-    public A aField;
+    public B bField;
 
     public void printMessage() {
         System.out.println("message");

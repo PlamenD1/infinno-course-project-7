@@ -1,4 +1,4 @@
-package org.example.TestClasses;
+package TestClasses;
 
 public class D implements DI {
 }

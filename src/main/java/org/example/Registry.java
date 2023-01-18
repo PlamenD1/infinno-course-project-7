@@ -1,30 +1,41 @@
 package org.example;
 
-import org.example.Annotations.Default;
-import org.example.Annotations.Inject;
-import org.example.Annotations.Named;
+import net.sf.cglib.proxy.Callback;
+import net.sf.cglib.proxy.Enhancer;
+import net.sf.cglib.proxy.FixedValue;
+import net.sf.cglib.proxy.InvocationHandler;
+import org.example.Annotations.*;
+import org.example.TestClasses.E;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.util.HashMap;
-import java.util.Map;
+import java.lang.reflect.*;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class Registry {
+    private final Pattern PSBC_PATTERN = Pattern.compile("\\$\\{(.*)}");
     Map<String, Object> stringToInstance = new HashMap<>();
     Map<Class<?>, Object> classToInstance = new HashMap<>();
-    Map<Class<?>, Class<?>> classToClass = new HashMap<>();
+    Map<Class<?>, Class<?>> interfaceToClass = new HashMap<>();
+
+    public Registry() {}
+
     public Object getInstance(String key) throws Exception {
         Object o = stringToInstance.get(key);
         if (o == null)
             return null;
-        setObjectFields(o);
+
+        handleFields(o, true);
 
         return o;
     }
 
-    @SuppressWarnings("unchecked")
     public <T> T getInstance(Class<T> c) throws Exception {
+        return getInstance(c, true);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> T getInstance(Class<T> c, boolean addDependencies) throws Exception {
         T o = (T) classToInstance.get(c);
         if (o == null) {
             Default _default = c.getAnnotation(Default.class);
@@ -32,46 +43,54 @@ public class Registry {
                 o = (T) getObject(_default.value());
             } else {
                 if (c.isInterface())
-                    throw new RegistryException();
+                    throw new RegistryException("Cannot instantiate interface!");
 
                 o = (T) getObject(c);
-                classToInstance.put(c, o);
+
+                if (addDependencies)
+                    classToInstance.put(c, o);
             }
         }
 
-        setObjectFields(o);
+
+        handleFields(o, addDependencies);
+
+        if (o instanceof Initializer) {
+            Initializer oInit = (Initializer) o;
+            oInit.init();
+        }
 
         return o;
     }
 
     public void decorateInstance(Object o) throws Exception {
-        setObjectFields(o);
+        handleFields(o, false);
     }
 
     public void registerImplementation(Class<?> c, Class<?> subClass) throws Exception {
-        if (classToClass.get(c) != null)
-            throw new RegistryException();
+        if (interfaceToClass.get(c) != null)
+            throw new RegistryException("This class is already registered!");
 
-        classToClass.put(c, subClass);
+        interfaceToClass.put(c, subClass);
     }
 
     public void registerInstance(String key, Object instance) throws Exception {
         if (stringToInstance.get(key) != null)
-            throw new RegistryException();
+            throw new RegistryException("This key is already registered!");
 
         stringToInstance.put(key, instance);
     }
 
     public void registerInstance(Class<?> c, Object instance) throws Exception {
         if (classToInstance.get(c) != null)
-            throw new RegistryException();
+            throw new RegistryException("This class is already registered!");
 
         classToInstance.put(c, instance);
     }
 
     public void registerInstance(Object instance) throws Exception {
         if (classToInstance.get(instance.getClass()) != null)
-            throw new RegistryException();
+            throw new RegistryException("The class of this object is already registered!");
 
         classToInstance.put(instance.getClass(), instance);
     }
@@ -84,28 +103,64 @@ public class Registry {
             if (inject == null)
                 continue;
 
-            Class<?>[] paramClasses = c.getParameterTypes();
-            Object[] params = new Object[paramClasses.length];
-            for (int i = 0; i < paramClasses.length; i++) {
-                if (isWrapperOrString(paramClasses[i]))
+            Parameter[] params = c.getParameters();
+            Object[] paramInstances = new Object[params.length];
+            for (int i = 0; i < params.length; i++) {
+                if (setIfPrimitiveWrapperOrString(params[i], paramInstances, i))
                     continue;
 
-                params[i] = getInstance(paramClasses[i]);
+                paramInstances[i] = getParamInstance(params, i);
             }
 
-            return c.newInstance(params);
+            return c.newInstance(paramInstances);
         }
 
         return clazz.getConstructor().newInstance();
     }
 
-    public void setObjectFields(Object o) throws Exception {
+    private Object getParamInstance(Parameter[] params, int i) throws Exception {
+        Object paramInstance = null;
+        NamedParameter name = params[i].getAnnotation(NamedParameter.class);
+        if (name != null && name.value() != null) {
+            paramInstance = getInstance(name.value());
+        }
+
+        if (paramInstance == null) {
+            paramInstance = getInstance(params[i].getType());
+        }
+
+        if (paramInstance == null)
+            throw new RegistryException("Cannot instantiate parameter for constructor!");
+
+        return paramInstance;
+    }
+
+    public void handleFields(Object o, boolean addDependencies) throws Exception {
         Field[] fields = o.getClass().getFields();
         for (Field f : fields) {
             f.setAccessible(true);
+
             Inject inject = f.getAnnotation(Inject.class);
             if (inject == null)
                 continue;
+
+            Lazy lazy = f.getAnnotation(Lazy.class);
+            if (lazy != null) {
+                Enhancer enhancer = new Enhancer();
+                enhancer.setSuperclass(f.getType());
+                enhancer.setCallback(new InvocationHandler() {
+                    @Override
+                    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+                        Object oField = getInstance(f.getType());
+                        f.set(o, oField);
+                        return method.invoke(oField, args);
+                    }
+                });
+                Object proxy = enhancer.create();
+
+                f.set(o, proxy);
+                continue;
+            }
 
             Named named = f.getAnnotation(Named.class);
 
@@ -113,40 +168,65 @@ public class Registry {
                 f.set(o, stringToInstance.get(f.getName()));
             }
 
-            if (f.get(o) != null)
-                continue;
-
-            f.set(o, classToInstance.get(f.getType()));
-
-            if (f.get(o) != null)
-                continue;
-
-            if (f.getType().isInterface() && f.get(o) == null) {
-                Class<?> clazz = classToClass.get(f.getType());
-                if (clazz != null) {
-                    f.set(o, getInstance(clazz));
+            if (!f.getType().isPrimitive()) {
+                if (f.get(o) != null) {
                     continue;
                 }
 
-                Default _default = f.getType().getAnnotation(Default.class);
-                if (_default == null)
-                    throw new RegistryException();
+                f.set(o, classToInstance.get(f.getType()));
 
+                if (f.get(o) != null) {
+                    continue;
+                }
+
+                if (!f.getType().isInterface()) {
+                    f.set(o, getInstance(f.getType(), addDependencies));
+                    continue;
+                }
+
+                Class<?> clazz = interfaceToClass.get(f.getType());
+                if (clazz != null) {
+                    f.set(o, getInstance(clazz, addDependencies));
+                    continue;
+                }
+            }
+
+            Value value = f.getAnnotation(Value.class);
+            if (value == null || value.value() == null) {
+                continue;
+            }
+
+            Matcher matcher = PSBC_PATTERN.matcher(value.value());
+            if (matcher.find()) {
+                String propName = matcher.group(1);
+
+                PropertySourcesPlaceholderConfigurer pspc = getInstance(PropertySourcesPlaceholderConfigurer.class);
+                if (pspc.processProperty(f, o, propName)) {
+                    continue;
+                }
+            }
+
+            Default _default = f.getType().getAnnotation(Default.class);
+            if (_default == null && !f.getType().isPrimitive())
+                throw new RegistryException("Missing default class!");
+
+            if (_default != null) {
                 Class<?> defaultClass = _default.value();
                 if (defaultClass == null)
-                    throw new RegistryException();
+                    throw new RegistryException("Missing default class!");
 
-                f.set(o, getInstance(defaultClass));
-            } else f.set(o, getInstance(f.getType()));
+                f.set(o, getInstance(defaultClass, addDependencies));
+            }
         }
     }
 
-    boolean isWrapperOrString(Class<?> clazz) {
-        return clazz == Integer.class ||
-               clazz == Double.class ||
-               clazz == Float.class ||
-               clazz == Boolean.class ||
-               clazz == Byte.class ||
-               clazz == String.class;
+    boolean setIfPrimitiveWrapperOrString(Parameter o, Object[] paramInstances, int index) {
+            Object inst = stringToInstance.get(o.getClass().getSimpleName());
+
+            if (inst == null)
+                return false;
+
+            paramInstances[index] = inst;
+            return true;
     }
 }
